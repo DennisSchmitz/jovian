@@ -1,0 +1,9 @@
+name: scaffold_classification
+channels:
+  - bioconda
+  - conda-forge
+  - intel
+  - anaconda
+  - defaults
+dependencies:
+    - blast==2.12.0 #? was ==2.9.0

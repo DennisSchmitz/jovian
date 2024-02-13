@@ -1,0 +1,1104 @@
+"""
+Starting point of the Jovian metagenomic pipeline and wrapper
+Authors:
+    Dennis Schmitz, Florian Zwagemaker, Sam Nooij, Robert Verhagen,
+    Karim Hajji, Jeroen Cremer, Thierry Janssens, Mark Kroon, Erwin
+    van Wieringen, Harry Vennema, Miranda de Graaf, Annelies Kroneman,
+    Jeroen Laros, Marion Koopmans
+Organization:
+    Rijksinstituut voor Volksgezondheid en Milieu (RIVM)
+    Dutch Public Health institute (https://www.rivm.nl/en)
+    Erasmus Medical Center (EMC) Rotterdam (https://www.erasmusmc.nl/en)
+Departments:
+    RIVM Virology, RIVM Bioinformatics, EMC Viroscience
+Date and license:
+    2018 - present, AGPL3 (https://www.gnu.org/licenses/agpl-3.0.en.html)
+Homepage containing documentation, examples and changelog:
+    https://github.com/DennisSchmitz/jovian
+Funding:
+    This project/research has received funding from the European Union's
+    Horizon 2020 research and innovation programme under grant agreement
+    No. 643476.
+Automation:
+    iRODS automatically executes this workflow for the "vir-ngs" project
+"""
+
+import pprint
+import yaml
+import os
+import sys
+import json
+from directories import *
+import snakemake
+
+snakemake.utils.min_version("6.0")
+
+yaml.warnings({'YAMLLoadWarning': False})
+shell.executable('/bin/bash')
+
+SAMPLES = {}
+
+with open("samplesheet.yaml") as sheetfile:
+    SAMPLES = yaml.safe_load(sheetfile)
+
+def low_memory_job(wildcards, threads, attempt):
+    if config['computing_execution'] == 'local':
+        return min(attempt * threads * 1 * 1000, config['max_local_mem'])
+    return attempt * threads * 1 * 1000
+
+def medium_memory_job(wildcards, threads, attempt):
+    if config['computing_execution'] == 'local':
+        return min(attempt * threads * 2 * 1000, config['max_local_mem'])
+    return attempt * threads * 2 * 1000
+
+def high_memory_job(wildcards, threads, attempt):
+    if config['computing_execution'] == 'local':
+        return min(attempt * threads * 4 * 1000, config['max_local_mem'])
+    return attempt * threads * 4 * 1000
+
+def very_high_memory_job(wildcards, threads, attempt):
+    if config['computing_execution'] == 'local':
+        return min(attempt * threads * 4 * 1.75 * 1000, config['max_local_mem'])
+    return attempt * threads * 4 * 1.75 * 1000
+
+
+# low_runtime_min = 60 # ? Schudeler sends jobs <= 1h runtime to the 6 additional nodes
+# high_runtime_min = 3000 # ? Little over two days
+
+
+localrules:
+    all,
+    Copy_scaffolds,
+    concat_files,
+    concat_filtered_SNPs,
+    HTML_IGVjs_variable_parts,
+    HTML_IGVjs_final
+
+
+rule all:
+    input:
+        f"{res}multiqc.html",
+        expand("{p}{sample}_scaffolds.fasta", p = f"{res+scf}", sample = SAMPLES),
+        expand("{p}{sample}_{ext}", p = f"{datadir + asm + filt}", sample = SAMPLES,
+            ext = ["sorted.bam", "sorted.bam.bai", "sorted_MarkDup-metrics.txt", "insert_size_metrics.txt", "insert_size_histogram.pdf"]),
+        expand("{p}{sample}_{ext}", p = f"{datadir + asm + filt}", sample = SAMPLES,
+            ext = [f"scaffolds_filtered-ge{config['Assembly']['min_contig_len']}.fasta.fai", "scaffolds_raw.vcf",
+            "scaffolds_AF5pct-filt.vcf", "scaffolds_AF5pct-filt.vcf.gz", "scaffolds_AF5pct-filt.vcf.gz.tbi"]),
+        expand("{p}{sample}_{ext}", p = f"{datadir + asm + filt}", sample = SAMPLES,
+            ext = ["ORF_AA.fa", "ORF_NT.fa", "annotation.gff", "annotation.gff.gz", "annotation.gff.gz.tbi", "contig_ORF_count_list.txt"]),
+        expand("{p}{sample}_{ext}", p = f"{datadir + asm + filt}", sample = SAMPLES,
+            ext = ["MinLenFiltSummary.stats", "perMinLenFiltScaffold.stats", "perORFcoverage.stats"]),
+        expand("{p}{sample}_GC.bedgraph", p = f"{datadir + asm + filt}", sample = SAMPLES),
+        f"{res}" + "igv.html",
+        expand("{p}{sample}.blastn", p = f"{datadir + scf_classified}", sample = SAMPLES),
+        expand("{p}{sample}{ext}", p = f"{datadir + scf_classified}", sample = SAMPLES,
+            ext = ["_lca_raw.gff", "_lca_tax.gff", "_lca_taxfilt.gff", "_lca_filt.gff", "_nolca_filt.gff", ".taxtab", ".taxMagtab"]),
+        f"{res}" + "krona.html",
+        expand("{p}Mapped_read_counts-{sample}.tsv", p = f"{res + cnt}", sample = SAMPLES),
+        f"{res + cnt}" + "Mapped_read_counts.tsv",
+        expand("{p}all_{ext}.tsv", p = f"{res}", ext = ["taxClassified", "taxUnclassified", "virusHost", "filtered_SNPs", "noLCA"]),
+        expand("{p}{file}", p = f"{res}", file = ["profile_read_counts.csv", "profile_read_percentages.csv", "Sample_composition_graph.html", "Superkingdoms_quantities_per_sample.csv"]),
+        expand("{p}{file}", p = f"{res}", file = ["Taxonomic_rank_statistics.tsv", "Virus_rank_statistics.tsv", "Phage_rank_statistics.tsv", "Bacteria_rank_statistics.tsv"]),
+        expand("{p}{file}", p = f"{res + hmap}", file = ["Superkingdoms_heatmap.html", "Virus_heatmap.html", "Phage_heatmap.html", "Bacteria_heatmap.html"])
+
+
+onstart:
+    try:
+        print("Checking if all specified files are accessible...")
+        for filename in [
+            config['db']['background'],
+            config['db']['virus_host_db']
+            ]:
+            if not os.path.exists(filename):
+                raise FileNotFoundError(filename)
+        for filepath in [
+            config['db']['blast_nt'],
+            config['db']['blast_taxdb'],
+            config['db']['krona_db'],
+            config['db']['new_taxdump_db'],
+            config['db']['mgkit_db']
+            ]:
+            if not os.path.exists(os.path.dirname(filepath)):
+                raise FileNotFoundError(filepath)
+    except FileNotFoundError as e:
+        print("This file is not available or accessible: %s" % e)
+        sys.exit(1)
+    else:
+        print("\tAll specified files are present!")
+    shell("""
+        mkdir -p results
+        echo -e "\nLogging pipeline settings..."
+        echo -e "\tGenerating methodological hash (fingerprint)..."
+        echo -e "This is the link to the code used for this analysis:\thttps://github.com/DennisSchmitz/jovian/tree/$(git log -n 1 --pretty=format:"%H")" > results/log_git.txt
+        echo -e "This code with unique fingerprint $(git log -n1 --pretty=format:"%H") was committed by $(git log -n1 --pretty=format:"%an <%ae>") at $(git log -n1 --pretty=format:"%ad")" >> results/log_git.txt
+        echo -e "\tGenerating full software list of current Conda environment..."
+        conda list > results/log_conda.txt
+        echo -e "\tGenerating used databases log..."
+        echo -e "==> User-specified background reference (default: Homo Sapiens NCBI GRch38 NO DECOY genome): <==\n$(ls -lah {config[db][background]}*)\n" > results/log_db.txt
+        echo -e "\n==> NCBI BLAST database: <==\n$(ls -lah {config[db][blast_nt]}*)\n" >> results/log_db.txt
+        echo -e "\n==> NCBI taxonomy database: <==\n$(ls -lah {config[db][blast_taxdb]}*)\n" >> results/log_db.txt
+        echo -e "\n==> Virus-Host Interaction Database: <==\n$(ls -lah {config[db][virus_host_db]}*)\n" >> results/log_db.txt
+        echo -e "\n==> Krona Taxonomy Database: <==\n$(ls -lah {config[db][krona_db]}*)\n" >> results/log_db.txt
+        echo -e "\n==> NCBI new_taxdump Database: <==\n$(ls -lah {config[db][new_taxdump_db]}*)\n" >> results/log_db.txt
+        echo -e "\n==> mgkit database: <==\n$(ls -lah {config[db][mgkit_db]}*)\n" >> results/log_db.txt
+        
+        echo -e "\tGenerating config file log..."
+        rm -f results/log_config.txt
+        for file in config/*.yaml
+        do
+            echo -e "\n==> Contents of file \"${{file}}\": <==" >> results/log_config.txt
+            cat ${{file}} >> results/log_config.txt
+            echo -e "\n\n" >> results/log_config.txt
+        done
+
+        echo -e "\tCopying samplesheet.yaml to results/ folder." #? To easily mount it in singularity since the results folder is mounted anyway
+        cp samplesheet.yaml results/samplesheet.yaml
+    """)
+
+
+rule QC_raw:
+    input: lambda wildcards: SAMPLES[wildcards.sample][wildcards.read]
+    output:
+        html = f"{datadir + qc_pre}" + "{sample}_{read}_fastqc.html",
+        zip = f"{datadir + qc_pre}" + "{sample}_{read}_fastqc.zip" 
+    conda:
+        f"{conda_envs}qc_and_clean.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/qc_and_clean:2.0.0"
+    log:
+        f"{logdir}" + "QC_raw_{sample}_{read}.log"
+    benchmark:
+        f"{logdir + bench}" + "QC_raw_{sample}_{read}.txt"
+    threads: config['threads']['Filter']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        output_dir = f"{datadir + qc_pre}",
+        script = "/Jovian/scripts/fqc.sh" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/fqc.sh"),
+    shell:
+        """
+bash {params.script} {input} {params.output_dir} {output.html} {output.zip} {log} {threads}
+        """
+
+
+rule QC_filter:
+    input: lambda wildcards: (SAMPLES[wildcards.sample][i] for i in ("R1", "R2"))
+    output:
+        r1 = f"{datadir + cln + qcfilt}" + "{sample}_pR1.fq",
+        r2 = f"{datadir + cln + qcfilt}" + "{sample}_pR2.fq",
+        r1_unpaired = f"{datadir + cln + qcfilt}" + "{sample}_uR1.fq",
+        r2_unpaired = f"{datadir + cln + qcfilt}" + "{sample}_uR2.fq"
+    conda:
+        f"{conda_envs}qc_and_clean.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/qc_and_clean:2.0.0"
+    log:
+        f"{logdir}" + "QC_filter_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "QC_filter_{sample}.txt"
+    threads: config['threads']['Filter']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        adapter_removal_config = "ILLUMINACLIP:/Jovian/files/nexteraPE_adapters.fa:2:30:10:8:true" if config['use_singularity_or_conda'] == "use_singularity" else "ILLUMINACLIP:" + srcdir("files/nexteraPE_adapters.fa") + ":2:30:10:8:true",
+        quality_trimming_config = f"SLIDINGWINDOW:{config['QC']['window_size']}:{config['QC']['min_phred_score']}",
+        minimum_length_config = f"MINLEN:{config['QC']['min_read_length']}"
+    shell:
+        """
+trimmomatic PE -threads {threads} {input[0]:q} {input[1]:q} {output.r1} {output.r1_unpaired} {output.r2} {output.r2_unpaired} \
+{params.adapter_removal_config} {params.quality_trimming_config} {params.minimum_length_config} > {log} 2>&1
+touch -r {output.r1} {output.r1_unpaired}
+touch -r {output.r2} {output.r2_unpaired}
+        """
+
+
+rule QC_clean:
+    input: 
+        f"{datadir + cln + qcfilt}" + "{sample}_{read}.fq" #? don't use the `rules.QC_filter.output` syntax since you need the {sample} and {read} capturegroups to have a properly functioning DAG
+    output:
+        html = f"{datadir + qc_post}" + "{sample}_{read}_fastqc.html",
+        zip = f"{datadir + qc_post}" + "{sample}_{read}_fastqc.zip"
+    conda:
+        f"{conda_envs}qc_and_clean.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/qc_and_clean:2.0.0"
+    log:
+        f"{logdir}" + "QC_clean_{sample}_{read}.log"
+    benchmark:
+        f"{logdir + bench}" + "QC_clean_{sample}_{read}.txt"
+    threads: config['threads']['Filter']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        output_dir = f"{datadir + qc_post}"
+    shell: 
+        """
+if [ -s "{input}" ]; then
+    fastqc -t {threads} --quiet --outdir {params.output_dir} {input} > {log} 2>&1
+else
+    touch {output.html}
+    touch {output.zip}
+    echo "touched things because input was empty" > {log} 2>&1
+fi
+        """
+
+
+rule Remove_BG_p1:
+    input: 
+        bg = config['db']['background'],
+        r1 = rules.QC_filter.output.r1,
+        r2 = rules.QC_filter.output.r2,
+        r1_unpaired = rules.QC_filter.output.r1_unpaired,
+        r2_unpaired = rules.QC_filter.output.r2_unpaired
+    output: 
+        bam = f"{datadir + cln + aln}" + "{sample}_raw-alignment.bam",
+        bai = f"{datadir + cln + aln}" + "{sample}_raw-alignment.bam.bai"
+    conda:
+        f"{conda_envs}qc_and_clean.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/qc_and_clean:2.0.0"
+    log:
+        f"{logdir}" + "Remove_BG_p1_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "Remove_BG_p1_{sample}.txt"
+    threads: config['threads']['Alignments']
+    resources:
+        mem_mb = high_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        aln_type = '--local'
+    shell:
+        """
+bowtie2 --time --threads {threads} {params.aln_type} -x {input.bg} -1 {input.r1} -2 {input.r2} -U {input.r1_unpaired} -U {input.r2_unpaired} 2> {log} |\
+samtools view -@ {threads} -uS - 2>> {log} |\
+samtools sort -@ {threads} - -o {output.bam} >> {log} 2>&1
+samtools index -@ {threads} {output.bam} >> {log} 2>&1
+        """
+
+
+rule Remove_BG_p2:
+    input: 
+        bam = rules.Remove_BG_p1.output.bam,
+        bai = rules.Remove_BG_p1.output.bai
+    output: 
+        r1 = f"{datadir + cln + filt}" + "{sample}_pR1.fq",
+        r2 = f"{datadir + cln + filt}" + "{sample}_pR2.fq",
+    conda:
+        f"{conda_envs}qc_and_clean.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/qc_and_clean:2.0.0"
+    log:
+        f"{logdir}" + "Remove_BG_p2_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "Remove_BG_p2_{sample}.txt"
+    threads: config['threads']['Filter']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    shell:
+        """
+samtools view -@ {threads} -b -f 1 -f 8 {input.bam} 2> {log} |\
+samtools sort -@ {threads} -n - 2>> {log} |\
+bedtools bamtofastq -i - -fq {output.r1} -fq2 {output.r2} >> {log} 2>&1
+        """
+
+
+rule Remove_BG_p3:
+    input: 
+        bam = rules.Remove_BG_p1.output.bam,
+        bai = rules.Remove_BG_p1.output.bai    
+    output: 
+        tbam = temp(f"{datadir + cln + aln}" + "{sample}_temp_unpaired.bam"),
+        un = f"{datadir + cln + filt}" + "{sample}_unpaired.fq",
+    conda:
+        f"{conda_envs}qc_and_clean.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/qc_and_clean:2.0.0"
+    log:
+        f"{logdir}" + "Remove_BG_p3_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "Remove_BG_p3_{sample}.txt"
+    threads: config['threads']['Filter']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    shell:
+        """
+samtools view -@ {threads} -b -F 1 -f 4 {input.bam} 2> {log} |\
+samtools sort -@ {threads} -n -o {output.tbam} 2>> {log}
+bedtools bamtofastq -i {output.tbam} -fq {output.un} >> {log} 2>&1
+        """
+
+
+rule Assemble:
+    input: 
+        r1 = rules.Remove_BG_p2.output.r1,
+        r2 = rules.Remove_BG_p2.output.r2,
+        un = rules.Remove_BG_p3.output.un
+    output: 
+        scaffolds = f"{datadir + asm + raw}" + "{sample}/scaffolds.fasta",
+        scaff_filt = f"{datadir + asm + filt}" + "{sample}" + f"_scaffolds_filtered-ge{config['Assembly']['min_contig_len']}.fasta",
+    conda:
+        f"{conda_envs}assembly.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/assembly:2.0.0"
+    log:
+        f"{logdir}" + "Assemble_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "Assemble_{sample}.txt"
+    threads: config['threads']['Assemble']
+    resources:
+        mem_mb = very_high_memory_job,
+        # runtime_min = high_runtime_min
+    params:
+        min_contig_len = config['Assembly']['min_contig_len'],
+        kmersizes = config['Assembly']['kmersizes'],
+        outdir = f"{datadir + asm + raw}" + "{sample}/"
+    shell:
+        """
+spades.py --only-assembler --meta -1 {input.r1} -2 {input.r2} -s {input.un} -t {threads} -m $(({resources.mem_mb} / 1000)) -k {params.kmersizes} -o {params.outdir} > {log} 2>&1
+seqtk seq {output.scaffolds} 2>> {log} |\
+gawk -F "_" '/^>/ {{if ($4 >= {params.min_contig_len}) {{print $0; getline; print $0}};}}' 2>> {log} 1> {output.scaff_filt} 
+        """
+
+
+rule align_to_scaffolds_RmDup_FragLength:
+    input:
+        fasta = rules.Assemble.output.scaff_filt,
+        R1 = rules.Remove_BG_p2.output.r1,
+        R2 = rules.Remove_BG_p2.output.r2
+    output:
+        bam = f"{datadir + asm + filt}" + "{sample}_sorted.bam",
+        bam_bai = f"{datadir + asm + filt}" + "{sample}_sorted.bam.bai",
+        dup_metrics = f"{datadir + asm + filt}" + "{sample}_sorted_MarkDup-metrics.txt",
+        frag_metrics = f"{datadir + asm + filt}" + "{sample}_insert_size_metrics.txt",
+        frag_pdf = f"{datadir + asm + filt}" + "{sample}_insert_size_histogram.pdf"
+    conda:
+        f"{conda_envs}sequence_analysis.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/sequence_analysis:2.0.0"
+    log:
+        f"{logdir}" + "align_to_scaffolds_RmDup_FragLength_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "align_to_scaffolds_RmDup_FragLength_{sample}.txt"
+    threads: config['threads']['align_to_scaffolds_RmDup_FragLength']
+    resources:
+        mem_mb = high_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        remove_dups = "", #? To turn this on, e.g. for metagenomics data replace it with a "-r" [NB, without quotes]. To turn this off, e.g. for amplicon experiments such as ARTIC, replace this with "" #! The `-r` will HARD remove the duplicates instead of only marking them, N.B. this is REQUIRED for the downstream bbtools' pileup.sh to work --> it ignores the DUP marker and counts the reads in its coverage metrics. Thus giving a false sense of confidence.
+        markdup_mode = "t",
+        max_read_length = "300" #? This is the default value and also the max read length of Illumina in-house sequencing.
+    shell:
+        """
+bwa index {input.fasta} > {log} 2>&1
+bwa mem -t {threads} {input.fasta} {input.R1} {input.R2} 2>> {log} |\
+samtools view -@ {threads} -uS - 2>> {log} |\
+samtools collate -@ {threads} -O - 2>> {log} |\
+samtools fixmate -@ {threads} -m - - 2>> {log} |\
+samtools sort -@ {threads} - -o - 2>> {log} |\
+samtools markdup -@ {threads} -l {params.max_read_length} -m {params.markdup_mode} {params.remove_dups} -f {output.dup_metrics} - {output.bam} >> {log} 2>&1
+samtools index -@ {threads} {output.bam} >> {log} 2>&1
+
+picard -Dpicard.useLegacyParser=false CollectInsertSizeMetrics -I {output.bam} -O {output.frag_metrics} -H {output.frag_pdf} >> {log} 2>&1
+        """
+
+
+rule SNP_calling:
+    input:
+        fasta = rules.Assemble.output.scaff_filt,
+        bam = rules.align_to_scaffolds_RmDup_FragLength.output.bam,
+        bam_bai = rules.align_to_scaffolds_RmDup_FragLength.output.bam_bai
+    output:
+        fasta_fai = f"{datadir + asm + filt}" + "{sample}" + f"_scaffolds_filtered-ge{config['Assembly']['min_contig_len']}.fasta.fai",
+        unfilt_vcf = f"{datadir + asm + filt}" + "{sample}" + f"_scaffolds_raw.vcf",
+        filt_vcf = f"{datadir + asm + filt}" + "{sample}" + f"_scaffolds_AF5pct-filt.vcf",
+        zipped_filt_vcf = f"{datadir + asm + filt}" + "{sample}" + f"_scaffolds_AF5pct-filt.vcf.gz",
+        zipped_filt_vcf_index = f"{datadir + asm + filt}" + "{sample}" + f"_scaffolds_AF5pct-filt.vcf.gz.tbi"
+    conda:
+        f"{conda_envs}sequence_analysis.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/sequence_analysis:2.0.0"
+    log:
+        f"{logdir}" + "SNP_calling_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "SNP_calling_{sample}.txt"
+    threads: config['threads']['SNP_calling']
+    resources:
+        mem_mb = high_memory_job,
+        # runtime_min = high_runtime_min # ? rarely it takes >1h to run this rule
+    params:
+        max_cov = 20000, #? Maximum coverage used for SNP calling.
+        min_AF = 0.05 #? This is the minimum allelle frequency (=AF) for which a SNP is reported, default is 5%.
+    shell:
+        """
+samtools faidx -o {output.fasta_fai} {input.fasta} > {log} 2>&1
+lofreq call-parallel -d {params.max_cov} --no-default-filter --pp-threads {threads} -f {input.fasta} -o {output.unfilt_vcf} {input.bam} >> {log} 2>&1
+lofreq filter -a {params.min_AF} -i {output.unfilt_vcf} -o {output.filt_vcf} >> {log} 2>&1
+bgzip -c {output.filt_vcf} 2>> {log} 1> {output.zipped_filt_vcf}
+tabix -p vcf {output.zipped_filt_vcf} >> {log} 2>&1
+        """
+
+
+rule ORF_analysis:
+    input:
+        rules.Assemble.output.scaff_filt
+    output:
+        ORF_AA_fasta = f"{datadir + asm + filt}" + "{sample}_ORF_AA.fa",
+        ORF_NT_fasta = f"{datadir + asm + filt}" + "{sample}_ORF_NT.fa",
+        ORF_annotation_gff = f"{datadir + asm + filt}" + "{sample}_annotation.gff",
+        zipped_gff3 = f"{datadir + asm + filt}" + "{sample}_annotation.gff.gz",
+        index_zipped_gff3 = f"{datadir + asm + filt}" + "{sample}_annotation.gff.gz.tbi",
+        contig_ORF_count_list = f"{datadir + asm + filt}" + "{sample}_contig_ORF_count_list.txt"
+    conda:
+        f"{conda_envs}sequence_analysis.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/sequence_analysis:2.0.0"
+    log:
+        f"{logdir}" + "ORF_analysis_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "ORF_analysis_{sample}.txt"
+    threads: config['threads']['ORF_analysis']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        procedure = "meta",
+        output_format = "gff"
+    shell:
+        """
+prodigal -q -i {input} -a {output.ORF_AA_fasta} -d {output.ORF_NT_fasta} -o {output.ORF_annotation_gff} -p {params.procedure} -f {params.output_format} > {log} 2>&1
+bgzip -c {output.ORF_annotation_gff} 2>> {log} 1> {output.zipped_gff3}
+tabix -p gff {output.zipped_gff3} >> {log} 2>&1
+egrep "^>" {output.ORF_NT_fasta} | sed 's/_/ /6' | tr -d ">" | cut -f 1 -d " " | uniq -c > {output.contig_ORF_count_list}
+        """
+
+
+rule Contig_metrics:
+    input:
+        bam = rules.align_to_scaffolds_RmDup_FragLength.output.bam,
+        fasta = rules.Assemble.output.scaff_filt,
+        ORF_NT_fasta = rules.ORF_analysis.output.ORF_NT_fasta
+    output:
+        summary = f"{datadir + asm + filt}" + "{sample}_MinLenFiltSummary.stats",
+        perScaffold = f"{datadir + asm + filt}" + "{sample}_perMinLenFiltScaffold.stats",
+        perORFcoverage = f"{datadir + asm + filt}" + "{sample}_perORFcoverage.stats"
+    conda:
+        f"{conda_envs}sequence_analysis.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/sequence_analysis:2.0.0"
+    log:
+        f"{logdir}" + "Contig_metrics_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "Contig_metrics_{sample}.txt"
+    threads: config['threads']['Contig_metrics']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+    shell: #! bbtools' pileup.sh counts every read, even those marked as duplicate upstream. Hence, for accurate counts, make sure the `remove_dups` param in rule `align_to_scaffolds_RmDup_FragLength` is set to `-r`.
+        """
+pileup.sh in={input.bam} ref={input.fasta} fastaorf={input.ORF_NT_fasta} outorf={output.perORFcoverage} out={output.perScaffold} secondary=f samstreamer=t 2> {output.summary} 1> {log}
+        """
+
+
+rule GC_content:
+    input:
+        fasta = rules.Assemble.output.scaff_filt,
+        fasta_fai = rules.SNP_calling.output.fasta_fai
+    output:
+        fasta_sizes = f"{datadir + asm + filt}" + "{sample}" + f"_scaffolds_filtered-ge{config['Assembly']['min_contig_len']}.fasta.sizes",
+        bed_windows = f"{datadir + asm + filt}" + "{sample}.windows",
+        GC_bed = f"{datadir + asm + filt}" + "{sample}_GC.bedgraph"
+    conda:
+        f"{conda_envs}sequence_analysis.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/sequence_analysis:2.0.0"
+    log:
+        f"{logdir}" + "GC_content_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "GC_content_{sample}.txt"
+    threads: config['threads']['GC_content']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        window_size = 50
+    shell:
+        """
+cut -f 1,2 {input.fasta_fai} 2> {log} 1> {output.fasta_sizes}
+bedtools makewindows -g {output.fasta_sizes} -w {params.window_size} 2>> {log} 1> {output.bed_windows}
+bedtools nuc -fi {input.fasta} -bed {output.bed_windows} 2>> {log} | cut -f 1-3,5 2>>{log} 1> {output.GC_bed}
+        """
+
+
+rule HTML_IGVjs_variable_parts:
+    input:
+        fasta = rules.Assemble.output.scaff_filt,
+        ref_GC_bedgraph = rules.GC_content.output.GC_bed,
+        ref_zipped_ORF_gff = rules.ORF_analysis.output.zipped_gff3,
+        basepath_zipped_SNP_vcf = rules.SNP_calling.output.zipped_filt_vcf,
+        basepath_sorted_bam = rules.align_to_scaffolds_RmDup_FragLength.output.bam
+    output:
+        tab_output = f"{datadir + html}" + "2_tab_{sample}",
+        div_output = f"{datadir + html}" + "4_html_divs_{sample}",
+        js_flex_output = f"{datadir + html}" + "6_js_flex_{sample}"
+    conda:
+        f"{conda_envs}data_wrangling.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/data_wrangling:2.0.0"
+    log:
+        f"{logdir}" + "HTML_IGVjs_variable_parts_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "HTML_IGVjs_variable_parts_{sample}.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        script_html_path = "/Jovian/scripts/html/" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/html/"),
+        nginx_ip = "http://127.0.0.1",
+        nginx_port = "8079"
+    shell:
+        """
+bash {params.script_html_path}igvjs_write_tabs.sh {wildcards.sample} {output.tab_output} > {log} 2>&1 
+bash {params.script_html_path}igvjs_write_divs.sh {wildcards.sample} {output.div_output} >> {log} 2>&1 
+bash {params.script_html_path}igvjs_write_flex_js_middle.sh {wildcards.sample} {output.js_flex_output} {input.fasta} {input.ref_GC_bedgraph} {input.ref_zipped_ORF_gff} {input.basepath_zipped_SNP_vcf} {input.basepath_sorted_bam} {params.nginx_ip} {params.nginx_port} >> {log} 2>&1 
+        """
+
+
+rule HTML_IGVjs_final:
+    input:
+        expand("{p}{chunk_name}_{sample}", p = f"{datadir + html}", chunk_name = ["2_tab", "4_html_divs", "6_js_flex"], sample = SAMPLES)
+    output:
+        f"{res}" + "igv.html"
+    conda:
+        f"{conda_envs}data_wrangling.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/data_wrangling:2.0.0"
+    log:
+        f"{logdir}" + "HTML_IGVjs_final.log"
+    benchmark:
+        f"{logdir + bench}" + "HTML_IGVjs_final.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        tab_basename = f"{datadir + html}" + "2_tab_",
+        div_basename = f"{datadir + html}" + "4_html_divs_",
+        js_flex_basename = f"{datadir + html}" + "6_js_flex_",
+        files_path = "/Jovian/files/html/" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("files/html/"),
+    shell:
+        """
+cat {params.files_path}1_header.html > {output} 2> {log}
+cat {params.tab_basename}* >> {output} 2>> {log}
+cat {params.files_path}3_tab_explanation.html >> {output} 2>> {log}
+cat {params.div_basename}* >> {output} 2>> {log}
+cat {params.files_path}5_js_begin.html >> {output} 2>> {log}
+cat {params.js_flex_basename}* >> {output} 2>> {log}
+cat {params.files_path}7_js_end.html >> {output} 2>> {log}
+        """
+
+
+rule Scaffold_classification:
+    input:
+        rules.Assemble.output.scaff_filt
+    output:
+        f"{datadir + scf_classified}" + "{sample}.blastn"
+    conda:
+        f"{conda_envs}scaffold_classification.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/scaffold_classification:2.0.0"
+    log:
+        f"{logdir}" + "Scaffold_classification_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "Scaffold_classification_{sample}.txt"
+    threads: config['threads']['Scaffold_classification']
+    resources:
+        mem_mb = very_high_memory_job,
+        # runtime_min = high_runtime_min
+    params:
+        nt_db_path = config['db']['blast_nt'],
+        taxdb_db_path = config['db']['blast_taxdb'],
+        outfmt = "6 std qseqid sseqid staxids sscinames stitle",
+        evalue = "0.05", #? E-value threshold for saving hits
+        qcov_hsp_perc = "50", #? Minimum length percentage of the query (i.e. scaffold) to be covered by the hsp, i.e. hits with less than this value will not be reported.
+        max_target_seqs = "250",
+        max_hsps = "1"
+    shell:
+        """
+export BLASTDB="{params.taxdb_db_path}"
+blastn -task megablast -outfmt "{params.outfmt}" -query {input} -evalue {params.evalue} -qcov_hsp_perc {params.qcov_hsp_perc} -max_target_seqs {params.max_target_seqs} -max_hsps {params.max_hsps} -db {params.nt_db_path} -num_threads {threads} -out {output} > {log} 2>&1
+        """
+
+
+#? Reformat blast tsv output to gff	
+#? Remove all construct/synthetic entries (because the filtering based on their specific taxid, as perform in rule `taxfilter_gff`, is not adequate)	
+#? Remove any entry with a lower bitscore than the user specified bitscore_threshold (i.e. filter short alignments since every match is a +2 bitscore)
+rule make_gff: 
+    input:
+        rules.Scaffold_classification.output
+    output:
+        f"{datadir + scf_classified}" + "{sample}_lca_raw.gff" #? This is a temp file, removed in the onSuccess//onError clause.
+    conda:
+        f"{conda_envs}mgkit_lca.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/mgkit_lca:2.0.0"
+    log:
+        f"{logdir}" + "make_gff_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "make_gff_{sample}.txt"
+    threads: config['threads']['mgkit_lca']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        bitscore_threshold = "100",
+        filt_keywords = "/construct\|synthetic/Id"
+    shell: #? sed does a case-insensitive search and in-place deletion of any record containing the filt_keywords
+        """
+sed -i "{params.filt_keywords}" {input}
+blast2gff blastdb -v -b {params.bitscore_threshold} -n {input} {output} > {log} 2>&1
+        """
+
+
+#? Reformat gff, augment accession id of the blasthit with the taxid
+rule addtaxa_gff:
+    input:
+        rules.make_gff.output
+    output:
+        f"{datadir + scf_classified}" + "{sample}_lca_tax.gff"
+    conda:
+        f"{conda_envs}mgkit_lca.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/mgkit_lca:2.0.0"
+    log:
+        f"{logdir}" + "addtaxa_gff_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "addtaxa_gff_{sample}.txt"
+    threads: config['threads']['mgkit_lca']
+    resources:
+        mem_mb = high_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        mgkit_tax_db = config['db']['mgkit_db']
+    shell:
+        """
+add-gff-info addtaxa -v -t {params.mgkit_tax_db}nucl_gb.accession2taxid_sliced.tsv -e {input} {output} > {log} 2>&1  
+        """
+
+
+#? Filter taxid 81077 (https://www.ncbi.nlm.nih.gov/taxonomy/?term=81077 --> artificial sequences) and 12908 (https://www.ncbi.nlm.nih.gov/taxonomy/?term=12908 --> unclassified sequences)
+rule taxfilter_gff:
+    input:
+        rules.addtaxa_gff.output
+    output:
+        f"{datadir + scf_classified}" + "{sample}_lca_taxfilt.gff"
+    conda:
+        f"{conda_envs}mgkit_lca.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/mgkit_lca:2.0.0"
+    log:
+        f"{logdir}" + "taxfilter_gff_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "taxfilter_gff_{sample}.txt"
+    threads: config['threads']['mgkit_lca']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        mgkit_tax_db = config['db']['mgkit_db']
+    shell:
+        """
+taxon-utils filter -v -e 81077 -e 12908 -t {params.mgkit_tax_db}taxonomy.pickle {input} {output} > {log} 2>&1
+        """
+
+
+#? Filter gff on the user-specified bitscore-quantile settings.
+#? Filters on bitscore, it sorts assignments high to low and takes only the 3% highest number of records for LCA. (.97 param and 'ge' = greater or equal than params: NB it's an order-based analysis not a value-based one)
+rule qfilter_gff:
+    input:
+        rules.taxfilter_gff.output
+    output:
+        f"{datadir + scf_classified}" + "{sample}_lca_filt.gff"
+    conda:
+        f"{conda_envs}mgkit_lca.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/mgkit_lca:2.0.0"
+    log:
+        f"{logdir}" + "qfilter_gff_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "qfilter_gff_{sample}.txt"
+    threads: config['threads']['mgkit_lca']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        quantile_threshold = ".97"
+    shell:
+        """
+filter-gff sequence -v -t -a bitscore -f quantile -l {params.quantile_threshold} -c ge {input} {output} > {log} 2>&1
+        """
+
+
+#? Perform the LCA analysis.
+##? in `taxon-utils lca` the `-n {output.no_lca}` flag is important because these are reported in the visualisation report for manual inspection.
+##? in `taxon-utils lca` the `-b {params.bitscore_threshold} ` is redundant because this is already done in the first rule, still, leaving it in for clarity.
+##? the `sed` rule creates a header for the output file
+##? touch the {output.no_lca} if it hasn't been generated yet, otherwise you get an error downstream
+##? NB mgkit log10 transforms evalues, i.e. these are not the default evalues as reported by BLAST.
+##? `bin/average_logevalue_no_lca.py` adds a `taxid=1` and `evalue=1` for all entries without an LCA result (i.e. taxid=1, which is "Root") and also averages the e-values of the LCA constituents alongside setting av. log10 transformed evalues of 0 to -450 due to undeflow.
+##? `bin/krona_magnitudes.py` adds magnitude information for the Krona plot (same as default Krona method).
+rule lca_mgkit:
+    input:
+        filtgff = rules.qfilter_gff.output,
+        stats = rules.Contig_metrics.output.perScaffold
+    output:
+        no_lca = f"{datadir + scf_classified}" + "{sample}_nolca_filt.gff",
+        taxtab = f"{datadir + scf_classified}" + "{sample}.taxtab",
+        taxMagtab = f"{datadir + scf_classified}" + "{sample}.taxMagtab"
+    conda:
+        f"{conda_envs}mgkit_lca.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/mgkit_lca:2.0.0"
+    log:
+        f"{logdir}" + "lca_mgkit_{sample}.log" 
+    benchmark:
+        f"{logdir + bench}" + "lca_mgkit_{sample}.txt"
+    threads: config['threads']['mgkit_lca']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        mgkit_tax_db = config['db']['mgkit_db'],
+        bitscore_threshold = "100",
+        script_path = "/Jovian/scripts/" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/"),
+    shell:
+        """
+taxon-utils lca -v -b {params.bitscore_threshold} -s -p -n {output.no_lca} -t {params.mgkit_tax_db}taxonomy.pickle {input.filtgff} {output.taxtab} > {log} 2>&1;
+sed -i '1i #queryID\ttaxID' {output.taxtab} >> {log} 2>&1;
+if [[ ! -e {output.no_lca} ]]; then
+    touch {output.no_lca}
+fi
+python {params.script_path}average_logEvalue_no_lca.py {output.taxtab} {output.no_lca} {input.filtgff} {output.taxtab} >> {log} 2>&1;
+python {params.script_path}krona_magnitudes.py {output.taxtab} {input.stats} {output.taxMagtab} >> {log} 2>&1
+        """
+
+
+rule Krona:
+    input:
+        sorted(expand(rules.lca_mgkit.output.taxMagtab, sample = set(SAMPLES)))
+    output:
+        f"{res}" + "krona.html"
+    conda:
+        f"{conda_envs}krona.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/krona:2.0.0"
+    log:
+        f"{logdir}" + "krona.log"
+    benchmark:
+        f"{logdir + bench}" + "krona.txt"
+    threads: config['threads']['krona']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        krona_db_path = config['db']['krona_db']
+    shell:
+        """
+ktImportTaxonomy {input} -tax {params.krona_db_path} -i -k -m 4 -o {output} > {log} 2>&1
+        """
+
+
+rule count_mapped_reads:
+    input:
+        rules.align_to_scaffolds_RmDup_FragLength.output.bam
+    output:
+        f"{res + cnt}" + "Mapped_read_counts-{sample}.tsv"
+    conda:
+        f"{conda_envs}sequence_analysis.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/sequence_analysis:2.0.0"
+    log:
+        f"{logdir}" + "count_mapped_reads-{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "count_mapped_reads-{sample}.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        script = "/Jovian/scripts/count_mapped_reads.sh" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/count_mapped_reads.sh")
+    shell:
+        """
+bash {params.script} {input} > {output} 2> {log}
+        """
+
+
+rule concatenate_read_counts:
+    input:
+        expand(rules.count_mapped_reads.output, sample = SAMPLES)
+    output:
+        f"{res + cnt}" + "Mapped_read_counts.tsv"
+    conda:
+        f"{conda_envs}data_wrangling.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/data_wrangling:2.0.0"
+    log:
+        f"{logdir}" + "concatenate_read_counts.log"
+    benchmark:
+        f"{logdir + bench}" + "concatenate_read_counts.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        script = "/Jovian/scripts/concatenate_mapped_read_counts.py" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/concatenate_mapped_read_counts.py")
+    shell:
+        """
+python {params.script} -i {input} -o {output} > {log} 2>&1
+        """
+
+
+rule merge_all_metrics_into_single_tsv:
+    input:
+        bbtoolsFile = rules.Contig_metrics.output.perScaffold,
+        kronaFile = rules.lca_mgkit.output.taxtab,
+        minLenFiltScaffolds = rules.Assemble.output.scaff_filt,
+        scaffoldORFcounts = rules.ORF_analysis.output.contig_ORF_count_list,
+        virusHostDB = config['db']['virus_host_db'],
+        new_taxdump_rankedlineage = f"{config['db']['new_taxdump_db']}" + "rankedlineage.dmp.delim",
+        new_taxdump_host = f"{config['db']['new_taxdump_db']}" + "host.dmp.delim"
+    output:
+        taxClassifiedTable = f"{datadir + tbl}" + "{sample}_taxClassified.tsv",
+        taxUnclassifiedTable = f"{datadir + tbl}" + "{sample}_taxUnclassified.tsv",
+        virusHostTable = f"{datadir + tbl}" + "{sample}_virusHost.tsv",
+    conda:
+        f"{conda_envs}data_wrangling.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/data_wrangling:2.0.0"
+    log:
+        f"{logdir}" + "merge_all_metrics_into_single_tsv_{sample}.log"
+    benchmark:
+        f"{logdir + bench}" + "merge_all_metrics_into_single_tsv_{sample}.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        script = "/Jovian/scripts/merge_data.py" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/merge_data.py")
+    shell:
+        """
+python {params.script} {wildcards.sample} {input.bbtoolsFile} {input.kronaFile} {input.minLenFiltScaffolds} {input.scaffoldORFcounts} {input.virusHostDB} {input.new_taxdump_rankedlineage} {input.new_taxdump_host} {output.taxClassifiedTable} {output.taxUnclassifiedTable} {output.virusHostTable} > {log} 2>&1
+        """
+
+
+rule concat_files:
+    input:
+        expand(rules.merge_all_metrics_into_single_tsv.output, sample = SAMPLES, extension = ["taxClassified.tsv", "taxUnclassified.tsv", "virusHost.tsv"]),
+        expand(rules.lca_mgkit.output.no_lca, sample = SAMPLES)
+    output:
+        taxClassified = f"{res}" + "all_taxClassified.tsv",
+        taxUnclassified = f"{res}" + "all_taxUnclassified.tsv",
+        virusHost = f"{res}" + "all_virusHost.tsv",
+        noLCA = f"{res}" + "all_noLCA.tsv"
+    conda:
+        f"{conda_envs}data_wrangling.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/data_wrangling:2.0.0"
+    log:
+        f"{logdir}" + "concat_files.log"
+    benchmark:
+        f"{logdir + bench}" + "concat_files.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        search_folder = f"{datadir + tbl}",
+        classified_glob = "*_taxClassified.tsv",
+        unclassified_glob = "*_taxUnclassified.tsv",
+        virusHost_glob = "*_virusHost.tsv",
+        search_folder_noLCA = f"{datadir + scf_classified}",
+        noLCA_glob = "*_nolca_filt.gff"
+    shell:
+        """
+find {params.search_folder} -type f -name "{params.classified_glob}" -exec gawk 'NR==1 || FNR!=1' {{}} + | (read header; echo "$header"; sort -t$'\t' -k 1,1 -k 15,15nr) 2> {log} 1> {output.taxClassified}
+find {params.search_folder} -type f -name "{params.unclassified_glob}" -exec gawk 'NR==1 || FNR!=1' {{}} + | (read header; echo "$header"; sort -t$'\t' -k 1,1 -k 4,4nr) 2>> {log} 1> {output.taxUnclassified}
+find {params.search_folder} -type f -name "{params.virusHost_glob}" -exec gawk 'NR==1 || FNR!=1' {{}} + | (read header; echo "$header"; sort -t$'\t' -k 1,1 -k 2,2) 2>> {log} 1> {output.virusHost}
+
+find {params.search_folder_noLCA} -type f -name "{params.noLCA_glob}" -exec gawk 'BEGIN {{OFS="\t"; print "Sample_name", "Scaffold_name", "Constituent_taxIDs", "Constituent_tax_names"}} {{split(FILENAME, list_A, "_nolca_filt.gff"); split(list_A[1], list_B, "{params.search_folder_noLCA}"); print list_B[2], $0}}' {{}} + 2>> {log} 1> {output.noLCA}
+        """ #? Last one-liner: search all files with {params.noLCA_glob}, print a header, extract samplename by removing the extension ("_nolca_filt.gff") and then removing the root-path (stored in {params.search_folder_noLCA}), then print samplename in first column and the normal output after that, concat them for all samples in analysis.
+
+
+rule concat_filtered_SNPs:
+    input:
+        expand(rules.SNP_calling.output.filt_vcf, sample = SAMPLES)
+    output:
+        final = f"{res}" + "all_filtered_SNPs.tsv",
+        temp = temp(f"{res}" + "all_filtered_SNPs.temp")
+    conda:
+        f"{conda_envs}data_wrangling.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/data_wrangling:2.0.0"
+    log:
+        f"{logdir}" + "concat_filtered_SNPs.log"
+    benchmark:
+        f"{logdir + bench}" + "concat_filtered_SNPs.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        vcf_folder_glob = f"{datadir + asm + filt}/\*-filt.vcf",
+        script = "/Jovian/scripts/concat_filtered_vcf.py" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/concat_filtered_vcf.py")
+    shell:
+        """
+python {params.script} {params.vcf_folder_glob} {output.temp} > {log} 2>&1
+cat {output.temp} | (read header; echo "$header"; sort -t$'\t' -k1,1 -k2,2 -k3,3n) 1> {output.final} 2>> {log}
+        """
+
+
+rule MultiQC:
+    input: 
+        expand(rules.QC_raw.output.zip, sample = SAMPLES, read = ['R1', 'R2']),
+        expand(rules.QC_clean.output.zip, sample = SAMPLES, read = ['pR1', 'pR2', 'uR1', 'uR2']),
+        expand(rules.align_to_scaffolds_RmDup_FragLength.output.frag_metrics, sample = SAMPLES),
+        expand(rules.Remove_BG_p1.log, sample = SAMPLES),
+        expand(rules.QC_filter.log, sample = SAMPLES)
+    output: 
+        f"{res}multiqc.html",
+        expand("{p}multiqc_{program}.txt", p = f"{res+mqc_data}", program = ['fastqc', 'trimmomatic', 'bowtie2']),
+    conda:
+        f"{conda_envs}qc_and_clean.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/qc_and_clean:2.0.0"
+    log:
+        f"{logdir}" + "MultiQC.log"
+    benchmark:
+        f"{logdir + bench}" + "MultiQC.txt"
+    threads: config['threads']['MultiQC']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        conf = "/Jovian/files/multiqc_config.yaml" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("files/multiqc_config.yaml"),
+        outdir = f"{res}"
+    shell:
+        """
+multiqc --force --config {params.conf} -o {params.outdir} -n multiqc.html {input} > {log} 2>&1
+        """
+
+
+rule quantify_output:
+    input:
+        classified = rules.concat_files.output.taxClassified,
+        unclassified = rules.concat_files.output.taxUnclassified,
+        mapped_reads = rules.concatenate_read_counts.output,
+        fastqc = f"{res + mqc_data}multiqc_fastqc.txt",
+        trimmomatic = f"{res + mqc_data}multiqc_trimmomatic.txt",
+        hugo = expand("{p}{sample}_{suffix}.fq", p = f"{datadir + cln + filt}", sample = set(SAMPLES), suffix = ["pR1", "pR2", "unpaired"])
+    output:
+        read_count = f"{res}profile_read_counts.csv",
+        percentages = f"{res}profile_read_percentages.csv",
+        graph = f"{res}Sample_composition_graph.html"
+    conda:
+        f"{conda_envs}heatmaps.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/heatmaps:2.0.0"
+    log:
+        f"{logdir}" + "quantify_output.log"
+    benchmark:
+        f"{logdir + bench}" + "quantify_output.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        script = "/Jovian/scripts/quantify_profiles.py" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/quantify_profiles.py")
+    shell:
+        """
+python {params.script} -f {input.fastqc} -t {input.trimmomatic} -hg {input.hugo} -c {input.classified} -u {input.unclassified} -m {input.mapped_reads} -co {output.read_count} -p {output.percentages} -g {output.graph} -cpu {threads} -l {log}
+        """
+
+
+rule draw_heatmaps:
+    input:
+        classified = rules.concat_files.output.taxClassified,
+        numbers = f"{res + mqc_data}multiqc_trimmomatic.txt"
+    output:
+        super_quantities = f"{res}Superkingdoms_quantities_per_sample.csv",
+        super = f"{res + hmap}Superkingdoms_heatmap.html",
+        virus = f"{res + hmap}Virus_heatmap.html",
+        phage = f"{res + hmap}Phage_heatmap.html",
+        bact = f"{res + hmap}Bacteria_heatmap.html",
+        stats = f"{res}Taxonomic_rank_statistics.tsv",
+        vir_stats = f"{res}Virus_rank_statistics.tsv",
+        phage_stats = f"{res}Phage_rank_statistics.tsv",
+        bact_stats = f"{res}Bacteria_rank_statistics.tsv"
+    conda:
+        f"{conda_envs}heatmaps.yaml"
+    container:
+        "library://ds_bioinformatics/jovian/heatmaps:2.0.0"
+    log:
+        f"{logdir}" + "draw_heatmaps.log"
+    benchmark:
+        f"{logdir + bench}" + "draw_heatmaps.txt"
+    threads: config['threads']['data_wrangling']
+    resources:
+        mem_mb = medium_memory_job,
+        # runtime_min = low_runtime_min
+    params:
+        script = "/Jovian/scripts/draw_heatmaps.py" if config['use_singularity_or_conda'] == "use_singularity" else srcdir("scripts/draw_heatmaps.py")
+    shell:
+        """
+python {params.script} -c {input.classified} -n {input.numbers} -sq {output.super_quantities} -st {output.stats} -vs {output.vir_stats} -ps {output.phage_stats} -bs {output.bact_stats} -s {output.super} -v {output.virus} -p {output.phage} -b {output.bact} > {log} 2>&1
+        """
+
+
+rule Copy_scaffolds:
+    input: rules.Assemble.output.scaff_filt
+    output: f"{res+scf}" + "{sample}_scaffolds.fasta"
+    threads: 1
+    resources:
+        mem_mb = low_memory_job,
+        # runtime_min = low_runtime_min
+    shell:
+        """
+cp {input} {output}
+        """	
+
+
+vt_script_path = srcdir("scripts/virus_typing.sh") #? you can add a `--force` flag to the script to force it to overwrite previous results
+launch_report_script = srcdir("files/launch_report.sh") #? should be launched via iRODS, but leaving this for --local users and/or debugging
+onsuccess:
+    shell("""
+        echo -e "\nStarting virus typing, this may take a while...\n"
+        bash {vt_script_path} all
+
+        echo -e "Virus typing finished."
+
+        echo -e "Generating HTML index of log files..."
+        tree -hD --dirsfirst -H "../logs" -L 2 -T "Logs overview" --noreport --charset utf-8 -P "*" -o {res}logfiles_index.html {logdir}
+
+        echo -e "Copying \`launch_report.sh\` script to output folder."
+        cp {launch_report_script} ./
+        echo -e "\tLaunch the Jovian-report via command \`bash launch_report.sh ./\` from the user-specified output directory.\n\tNB, this requires singularity to be installed on your system."
+
+        echo -e "Jovian is finished with processing all the files in the given input directory."
+
+        echo -e "Shutting down..."
+    """)
+    return True
+
+
+onerror:
+    print("""
+    An error occurred and Jovian had to shut down.
+    Please check the the input and logfiles for any abnormalities and try again.
+    """)
+    return False

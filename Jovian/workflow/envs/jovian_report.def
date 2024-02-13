@@ -1,0 +1,66 @@
+BootStrap: docker
+From: continuumio/miniconda3
+
+%help
+    Singularity container for visualizing Jovian output, see https://github.com/DennisSchmitz/jovian
+
+%labels
+    project-owner Dennis Schmitz
+    maintainer RIVM-bioinformatics team https://github.com/RIVM-bioinformatics/
+    github https://github.com/DennisSchmitz/jovian
+    version 2.0.0
+
+%environment
+    export PATH=/opt/conda/bin:$PATH
+    export JUPYTER_CONFIG_DIR=/opt/.jupyter
+
+%files
+    packed_env_JupNB.tar.gz /packed_env_JupNB.tar.gz
+    Jovian_report.ipynb /Jovian_report.ipynb
+    overrides.css /overrides.css
+    edit.json /edit.json
+    notebook.json /notebook.json
+    tree.json /tree.json
+    acknowledgements.md /acknowledgements.md
+    authors.md /authors.md
+    default-site.conf /default-site.conf
+
+%post
+    export PATH=/opt/conda/bin:$PATH
+    export JUPYTER_CONFIG_DIR=/opt/.jupyter
+
+    # Unpack and clean the conda env
+    tar xvzf /packed_env_JupNB.tar.gz -C /opt/conda
+    conda-unpack
+    rm /packed_env_JupNB.tar.gz
+
+    # Mv the Jovian jupNB to proper Jovian root-folder
+    mkdir -p /opt/Jovian/
+    mv Jovian_report.ipynb /opt/Jovian/
+    jupyter trust /opt/Jovian/Jovian_report.ipynb
+
+    # Mv the Jovian ancillary files to proper folder
+    mkdir -p /opt/Jovian/files/
+    mv /acknowledgements.md /authors.md /opt/Jovian/files/
+
+    # Set proper jup-theme settings and jupNB config
+    mkdir -p /opt/.jupyter
+    jt -t grade3 -fs 95 -altp -tfs 11 -nfs 115 -cellw 88% -T
+    sed -i '1704,1706d' /opt/.jupyter/custom/custom.css
+    sed -i '35,55d' /opt/.jupyter/custom/custom.css
+    cat /overrides.css >> /opt/.jupyter/custom/custom.css
+    rm /overrides.css
+    jupyter notebook --generate-config
+
+    # Mv the css and json files for the jup-theme and jupNB report config
+    mkdir -p /opt/.jupyter/nbconfig/
+    mv /edit.json /opt/.jupyter/nbconfig/
+    mv /notebook.json /opt/.jupyter/nbconfig/
+    mv /tree.json /opt/.jupyter/nbconfig/
+
+    # nginx config 
+    mv /default-site.conf /opt/conda/etc/nginx/sites.d/default-site.conf
+
+%runscript
+    nginx&
+    jupyter notebook --port 8888 --ip=127.0.0.1 --notebook-dir /opt/Jovian/ --NotebookApp.iopub_data_rate_limit=100000000

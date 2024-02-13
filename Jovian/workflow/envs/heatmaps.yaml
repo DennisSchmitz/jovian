@@ -1,0 +1,13 @@
+name: heatmaps
+channels:
+  - bioconda
+  - conda-forge
+  - intel
+  - anaconda
+  - defaults
+dependencies:
+  - bokeh=1.0.1
+  - numpy=1.15.4
+  - pandas=0.23.4
+  - python=3.7.12
+  - jinja2=2.10.3

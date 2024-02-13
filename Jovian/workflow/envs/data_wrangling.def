@@ -1,0 +1,19 @@
+Bootstrap: docker
+From: continuumio/miniconda3
+
+%help
+    Singularity container for data wrangling, see https://github.com/DennisSchmitz/jovian
+
+%labels
+    project-owner Dennis Schmitz
+    maintainer RIVM-bioinformatics team https://github.com/RIVM-bioinformatics/
+    github https://github.com/DennisSchmitz/jovian
+    version 2.0.0
+
+%files
+    packed_env_data_wrangling.tar.gz /packed_env_data_wrangling.tar.gz
+
+%post
+    tar xvzf /packed_env_data_wrangling.tar.gz -C /opt/conda
+    conda-unpack
+    rm /packed_env_data_wrangling.tar.gz

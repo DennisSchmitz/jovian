@@ -1,0 +1,12 @@
+name: mgkit_lca
+channels:
+  - bioconda
+  - conda-forge
+  - intel
+  - anaconda
+  - defaults
+dependencies:
+    - mgkit==0.3.4
+    - python==2.7.18
+    - pandas==0.24.2
+    - numpy==1.16.6

@@ -1,0 +1,12 @@
+name: krona
+channels:
+  - bioconda
+  - conda-forge
+  - intel
+  - anaconda
+  - defaults
+dependencies:
+    - krona==2.7.1
+    - pandas==0.23.4
+    - python==3.7.0
+    - numpy==1.16.4
