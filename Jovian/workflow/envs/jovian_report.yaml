@@ -18,5 +18,5 @@ dependencies:
   - nginx==1.15.9
   - nb_conda==2.2.1
   - nb_conda_kernels==2.2.1
-  - notebook==5.7.5 # Bugfix for https://github.com/DennisSchmitz/Jovian/issues/10
-  - tornado==5.1.1 # Bugfix for https://github.com/DennisSchmitz/Jovian/issues/10
+  - notebook==5.7.5 # Bugfix for https://github.com/DennisSchmitz/Jovian_archive/issues/10
+  - tornado==5.1.1 # Bugfix for https://github.com/DennisSchmitz/Jovian_archive/issues/10
