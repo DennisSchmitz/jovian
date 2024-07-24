@@ -1,7 +1,6 @@
 channels:
-  - bioconda
   - conda-forge
-  - intel
+  - bioconda
   - nodefaults
 dependencies:
   - python=3.9
