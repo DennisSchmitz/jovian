@@ -21,7 +21,7 @@ def set_cores(cores: int) -> int:
     return max_available - 2 if cores >= max_available else cores
 
 
-def user_supplied_db_paths(background, blast_nt, blast_taxdb, mgkit_db, krona_db, virus_host_db, new_taxdump_db) -> None:
+def cli_db_paths_to_defaultconfig_dict(background, blast_nt, blast_taxdb, mgkit_db, krona_db, virus_host_db, new_taxdump_db) -> None:
     """
     If user-supplied database paths are given, set them in DefaultConfig.params["db"]KEY
 
@@ -44,18 +44,45 @@ def user_supplied_db_paths(background, blast_nt, blast_taxdb, mgkit_db, krona_db
         DefaultConfig.params["db"]["new_taxdump_db"] = new_taxdump_db
 
 
-def write_user_supplied_db_paths_to_home_dir_env() -> None:
+def parse_and_update_home_dir_env() -> None:
     """
-    DefaultConfig.params["db"] is non-empty if the user supplied database paths, so, store non-empty
-    values permanently in a hidden configuration YAML file in the user's HOME so they do not have to
-    supply it each time they run the wrapper.
+    It checks whether any database paths are already set in the home-dir env file and parses these.
+    These are compared against the DefaultConfig which by this point should already have been updated
+    based on the CLI supplied database paths (if any); these CLI supplied paths are given priority
+    and overwrite previously stored paths in the home-dir env file. Lastly, these values updated values
+    are writtend to the home-dir env file. By storing these paths in a hidden configuration YAML file
+    in the user's HOME so they do not have to supply it each time they run the wrapper.
+
+    NB. RIVM users do not need to do this, default paths compatible with the grid are set downstream
+    when these values are empty; i.e. no paths are provided via the home-dir env file or the CLI.
     """
-    db_paths = {key: value for key, value in DefaultConfig.params["db"].items() if value}
+    # check if there are previous entries in the configuration file, load them; if none, create an empty dictionary
+    try:
+        with open(__home_env_configuration__, "r", encoding="utf-8") as yaml_file:
+            db_paths = yaml.safe_load(yaml_file)
+    except FileNotFoundError:
+        db_paths = {}
+
+    # update them when the user supplied new paths for the same keys but keep
+    # the old paths if the user did not supply new paths for the same keys
+    db_paths_set_via_cli = {key: value for key, value in DefaultConfig.params["db"].items() if value}
+    db_paths_not_provided_via_cli = {key: value for key, value in DefaultConfig.params["db"].items() if not value}
+    for key, value in db_paths_set_via_cli.items():
+        if key in db_paths:  # ? so, user supplied a non-empty path for any of the DBs through the CLI
+            db_paths[key] = value
+
+    for key, value in db_paths_not_provided_via_cli.items():
+        if (
+            key not in db_paths
+        ):  # ? so, neither the user through the CLI nor the __home_env_configuration__ has a value for this key --> this will be filled in with a default value downstream
+            db_paths[key] = value
+
+    print(f"Writing user-supplied database paths to {__home_env_configuration__}\n{db_paths=}\n")
     with open(__home_env_configuration__, "w", encoding="utf-8") as yaml_file:
         yaml.dump(db_paths, yaml_file, default_flow_style=False)
 
 
-def set_db_paths(local: bool) -> None:
+def set_db_paths_or_use_defaults(local: bool) -> None:
     """
     If no user-supplied database paths are given (user_supplied_db_paths()) nor have they have been
     stored in the config file in the user's home-dir (write_user_supplied_db_paths_to_home_dir_env()),
@@ -184,9 +211,9 @@ def WriteConfigs(
     parameter_dict["QC"]["min_read_length"] = minreadlength  # ? Based on user supplied value
     parameter_dict["Assembly"]["min_contig_len"] = mincontiglength  # ? Based on user supplied value
     # ? set proper database paths, if none are given by the user, set default paths based on grid or local compute mode
-    user_supplied_db_paths(background, blast_nt, blast_taxdb, mgkit_db, krona_db, virus_host_db, new_taxdump_db)
-    write_user_supplied_db_paths_to_home_dir_env()
-    set_db_paths(local)
+    cli_db_paths_to_defaultconfig_dict(background, blast_nt, blast_taxdb, mgkit_db, krona_db, virus_host_db, new_taxdump_db)
+    parse_and_update_home_dir_env()
+    set_db_paths_or_use_defaults(local)
     check_validity_db_paths()
 
     # ! Below, update the configurations. I.e. values that are used by the Snakemake engine/wrapper itself
