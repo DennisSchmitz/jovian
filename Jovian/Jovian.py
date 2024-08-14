@@ -61,7 +61,8 @@ def get_args(givenargs):
         prog=__package_name__,
         usage="%(prog)s [required arguments] [optional arguments]",
         description="%(prog)s: a metagenomic analysis workflow for public health and clinics with interactive reports in your web-browser\n\n"
-        + "NB default database paths are hardcoded for RIVM users, otherwise, specify your own database paths using the optional arguments.\n"
+        + "NB default database paths are hardcoded for RIVM users, install the default databases using --install-databases or specify"
+        + " your own database paths using the optional arguments.\n"
         + "On subsequent invocations of %(prog)s, the database paths will be read from the file located at: "
         + __home_env_configuration__
         + " and you will not have to provide them again.\n"
