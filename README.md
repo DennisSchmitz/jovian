@@ -229,7 +229,7 @@ The workflow will update itself to the latest version automatically. This makes 
 ### Prerequisites
 
 1. Before you download and install Jovian, please make sure [Conda](https://docs.conda.io/projects/conda/en/latest/index.html) is installed on your system and functioning properly! Otherwise, install it via [these instuctions](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html). Conda is required to build the "main" environment and contains all required dependencies.
-2. Jovian is intended for usage with `singularity`, that is the only way we can properly validate functionality of the code and it helps reduce maintenance. As such, please make sure [Singularity](https://sylabs.io/singularity/), and its dependency [Go](https://go.dev/) are installed properly. Otherwise, install it via [these instructions](https://docs.sylabs.io/guides/3.1/user-guide/installation.html). Singularity is used to build all sub-units of the pipeline.
+2. Jovian is intended for usage with `singularity`, that is the only way we can properly validate functionality of the code and it helps reduce maintenance. As such, please make sure [Singularity](https://sylabs.io/singularity/), and its dependency [Go](https://go.dev/) are installed properly. Otherwise, install it via [these instructions](https://docs.sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps). Singularity is used to build all sub-units of the pipeline. If you are unfamiliar with `singularity`, please follow the [Quick Start steps](https://docs.sylabs.io/guides/latest/user-guide/quick_start.html#download-pre-built-images).  
 
 ### Download
 
