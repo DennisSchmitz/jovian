@@ -27,6 +27,7 @@ import argparse
 import multiprocessing
 import os
 import pathlib
+import subprocess
 import sys
 
 import snakemake
@@ -37,6 +38,7 @@ from Jovian.functions import MyHelpFormatter, color
 from Jovian.runconfigs import WriteConfigs
 from Jovian.samplesheet import WriteSampleSheet
 from Jovian.update import update
+from Jovian.workflow.scripts.installer import main as installer_main
 
 yaml.warnings({"YAMLLoadWarning": False})
 
@@ -59,7 +61,8 @@ def get_args(givenargs):
         prog=__package_name__,
         usage="%(prog)s [required arguments] [optional arguments]",
         description="%(prog)s: a metagenomic analysis workflow for public health and clinics with interactive reports in your web-browser\n\n"
-        + "NB default database paths are hardcoded for RIVM users, otherwise, specify your own database paths using the optional arguments.\n"
+        + "NB default database paths are hardcoded for RIVM users, install the default databases using --install-databases or specify"
+        + " your own database paths using the optional arguments.\n"
         + "On subsequent invocations of %(prog)s, the database paths will be read from the file located at: "
         + __home_env_configuration__
         + " and you will not have to provide them again.\n"
@@ -77,7 +80,7 @@ def get_args(givenargs):
         type=dir_path,
         metavar="DIR",
         help="The input directory containing the raw fastq(.gz) files",
-        required=True,
+        required=False,  # it's required, but this will be checked manually downstream since --install-databases must take priority
     )
 
     required_args.add_argument(
@@ -85,9 +88,14 @@ def get_args(givenargs):
         "-o",
         metavar="DIR",
         type=str,
-        default=currentpath(),
+        default=currentpath(),  # is required, defaults to current directory
         help="Output directory",
-        required=True,
+    )
+
+    optional_args.add_argument(
+        "--install-databases",
+        action="store_true",
+        help="Install the default databases (default: False). NB, carefully read the instructions here https://github.com/DennisSchmitz/Jovian?tab=readme-ov-file#installation-instructions",
     )
 
     optional_args.add_argument(
@@ -239,7 +247,65 @@ def get_args(givenargs):
         sys.exit(1)
     else:
         flags = arg.parse_args(givenargs)
+
+    if flags.install_databases:
+        database_installer_wrapper()
+    else:
+        if not flags.input:
+            print(f"{arg.prog} was called but no input directory was given, please try again \n\tUse '{arg.prog} -h' to see the help document")
+            sys.exit(1)
+
     return flags
+
+
+def database_installer_wrapper() -> None:
+    """
+    This will install the default databases required for Jovian, please read the instructions carefully:
+    https://github.com/DennisSchmitz/Jovian?tab=readme-ov-file#installation-instructions
+
+    During the process, the user will be asked to provide the basepath where the databases will be installed
+    and the timestamp of the NT database to be used. Importantly, this requires the host-system to have
+    awscli installed as well as singularity and normal linux tools like `gawk`, `wget`, `tar`, etc.
+
+    There are a couple of notable points to consider before running this script, since we as developers
+    are not able to predict your goals or experimental setup:
+    -   choice of databases is dependent on experimental design and should be considered carefully;
+        here we chose the human genome to remove human thus aligning with the GDPR and inhouse privacy
+        regulations. This would not make sense if you are working with, for example, metagenomics of
+        mollusc bioaccumulators, harbor porpoise tissue or virus-cultures on golden hamster cells, etc.,
+        here you might choose their respective host genomes to speed up analyses.
+    -   the databases are large and require a lot of disk space, the NT database alone is 100GB+ and
+        hence we recommend you to contact your system administrators to ask if these resources are
+        already available or to set them up on high-IO drives. Additionally, depending on your
+        experimental setup you might want to consider setting up a cronjob to update these databases
+        regularly, although, when you are working on a longitudinal study you might want to fix a
+        single version throughout your study with periodic freezes/snapshots of the databases.
+    -   depending on your study's ethical approval/informed consent, you might have to remove some
+        entries in your database from being reported, e.g., HIV or any other pathogens that can lead
+        to stigmatization.
+    """
+    print("Starting database installation...")
+
+    # ask users to provide the basepath where these databases will be installed
+    basepath = os.path.abspath(input("Please provide the basepath where the databases will be installed: ").strip())
+
+    # ask users to provide the timestamp of the NT and taxDB databases based on the awcli output
+    timestamp_options = subprocess.check_output("aws s3 ls --human-readable --no-sign-request s3://ncbi-blast-databases/", shell=True, text=True)
+    timestamp = input(
+        f"Select the timestamp of the NT database you want to use from the list below. \n{timestamp_options}\nEnter timestamp here: "
+    ).strip()
+
+    try:
+        installer_argv = ["--basepath", basepath, "--timestamp", timestamp]
+        # below the databases are installed with interactive input prompts for the basepath and timestamp variables,
+        # the installer script sets up __home_env_configuration__ file to point to the newly installed databases
+        installer_main(installer_argv)
+    except ValueError as err_msg:
+        print(f"Exiting due to error...\nError: {err_msg}")
+        sys.exit(1)
+
+    print("Finished database installation, exiting...")
+    sys.exit(0)
 
 
 def CheckInputFiles(indir):

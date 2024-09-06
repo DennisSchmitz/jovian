@@ -43,6 +43,7 @@
   - [Download](#download)
   - [Installation](#installation)
   - [Databases](#databases)
+    - [Considerations](#considerations)
 - [Citation](#citation)
 - [Funding](#funding)
 
@@ -139,7 +140,7 @@ usage: Jovian [required arguments] [optional arguments]
 
 Jovian: a metagenomic analysis workflow for public health and clinics with interactive reports in your web-browser
 
-NB default database paths are hardcoded for RIVM users, otherwise, specify your own database paths using the optional arguments.
+NB default database paths are hardcoded for RIVM users, install the default databases using --install-databases or specify your own database paths using the optional arguments.
 On subsequent invocations of Jovian, the database paths will be read from the file located at: /home/schmitzd/.jovian_env.yaml and you will not have to provide them again.
 Similarly, the default RIVM queue is provided as a default value for the '--queuename' flag, but you can override this value if you want to use a different queue.
 
@@ -148,6 +149,7 @@ Required arguments:
   --output DIR, -o DIR   Output directory (default: /some/path)
 
 Optional arguments:
+  --install-databases    Install the default databases (default: False). NB, carefully read the instructions here https://github.com/DennisSchmitz/Jovian?tab=readme-ov-file#installation-instructions
   --reset-db-paths       Reset the database paths to the default values
   --background File      Override the default human genome background path
   --blast-db Path        Override the default BLAST NT database path
@@ -227,7 +229,7 @@ The workflow will update itself to the latest version automatically. This makes 
 ### Prerequisites
 
 1. Before you download and install Jovian, please make sure [Conda](https://docs.conda.io/projects/conda/en/latest/index.html) is installed on your system and functioning properly! Otherwise, install it via [these instuctions](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html). Conda is required to build the "main" environment and contains all required dependencies.
-2. Jovian is intended for usage with `singularity`, that is the only way we can properly validate functionality of the code and it helps reduce maintenance. As such, please make sure [Singularity](https://sylabs.io/singularity/), and its dependency [Go](https://go.dev/) are installed properly. Otherwise, install it via [these instructions](https://docs.sylabs.io/guides/3.1/user-guide/installation.html). Singularity is used to build all sub-units of the pipeline.
+2. Jovian is intended for usage with `singularity`, that is the only way we can properly validate functionality of the code and it helps reduce maintenance. As such, please make sure [Singularity](https://sylabs.io/singularity/), and its dependency [Go](https://go.dev/) are installed properly. Otherwise, install it via [these instructions](https://docs.sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps). Singularity is used to build all sub-units of the pipeline. If you are unfamiliar with `singularity`, please follow the [Quick Start steps](https://docs.sylabs.io/guides/latest/user-guide/quick_start.html#download-pre-built-images).  
 
 ### Download
 
@@ -249,44 +251,21 @@ First, make sure you are in the root folder of the Jovian repo. If you followed 
 
 ### Databases
 
-Several databases are required before you can use `Jovian` for metagenomics analyses. These are listed below. Please note, these steps requires `Singularity` to be installed as described in the [installation](#installation) section.  
+Several databases are required before you can use `Jovian` for metagenomics analyses. These are listed below. Please note, these steps requires `Singularity` to be installed as described in the [installation](#installation) section. Importantly, take note of the [considerations](#considerations) listed below.  
 
 **NB, for people from the RIVM working on the in-house grid-computer, the following steps have already been performed for you.**
 
-1. Download the `krona` db. NB this step temporarily requires a large amount of storage space, takes some time to complete and might require you to retry it a couple of times.
-      1. `mkdir /to/desired/db/location/krona_db/; cd /to/desired/db/location/krona_db/`
-      2. `singularity pull --arch amd64 library://ds_bioinformatics/jovian/krona:2.0.0`
-      3. `singularity exec --bind "${PWD}" krona_2.0.0.sif bash /opt/conda/opt/krona/updateTaxonomy.sh ./`
-      4. `singularity exec --bind "${PWD}" krona_2.0.0.sif bash /opt/conda/opt/krona/updateAccessions.sh ./`
-      5. `rm krona_2.0.0.sif`
-2. Download the NCBI `nt` and `taxdb` databases. NB update time-stamp accordingly, list available time-stamps with `aws s3 ls --no-sign-request s3://ncbi-blast-databases/`. Importantly, use the same time-stamps for both `nt` and `taxdb`.
-      1. NB this requires `awscli` to be installed.
-      2. `mkdir /to/desired/db/location/nt/; cd /to/desired/db/location/nt/`
-      3. `aws s3 sync --no-sign-request s3://ncbi-blast-databases/[enter_timestamp_here]/ . --exclude "*" --include "nt.*"`
-      4. `aws s3 sync --no-sign-request s3://ncbi-blast-databases/[enter_timestamp_here]/ . --exclude "*" --include "taxdb*"`
-3. Download the `mgkit` database:
-      1. `mkdir /to/desired/db/location/mgkit/; cd /to/desired/db/location/mgkit/`
-      2. `singularity pull --arch amd64 library://ds_bioinformatics/jovian/mgkit_lca:2.0.0`
-      3. `singularity exec --bind "${PWD}" mgkit_lca_2.0.0.sif download-taxonomy.sh`
-      4. `rm taxdump.tar.gz`
-      5. `wget -O nucl_gb.accession2taxid.gz ftp://ftp.ncbi.nlm.nih.gov/pub/taxonomy/accession2taxid/nucl_gb.accession2taxid.gz; wget -O nucl_gb.accession2taxid.gz.md5 https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/accession2taxid/nucl_gb.accession2taxid.gz.md5; md5sum -c nucl_gb.accession2taxid.gz.md5`
-      6. `gunzip -c nucl_gb.accession2taxid.gz | cut -f2,3 > nucl_gb.accession2taxid_sliced.tsv; rm nucl_gb.accession2taxid.gz*`
-      7. `rm mgkit_lca_2.0.0.sif`
-4. Download the `virus_host_db`:
-      1. `mkdir /to/desired/db/location/virus_host_db/; cd /to/desired/db/location/virus_host_db/`
-      2. `wget -O virushostdb.tsv ftp://ftp.genome.jp/pub/db/virushostdb/virushostdb.tsv`
-5. Download the NCBI `new_taxdump` database:
-      1. `mkdir /to/desired/db/location/new_taxdump/; cd /to/desired/db/location/new_taxdump/`
-      2. `wget -O new_taxdump.tar.gz https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/new_taxdump/new_taxdump.tar.gz; wget -O new_taxdump.tar.gz.md5 https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/new_taxdump/new_taxdump.tar.gz.md5`
-      3. `if md5sum -c new_taxdump.tar.gz.md5; then tar -xzf new_taxdump.tar.gz; for file in *.dmp; do gawk '{gsub("\t",""); if(substr($0,length($0),length($0))=="|") print substr($0,0,length($0)-1); else print $0}' < ${file} > ${file}.delim; done; else echo "The md5sum does not match new_taxdump.tar.gz! Please try downloading again."; fi`
-6. Download the HuGo reference via:
-      1. NB this requires `awscli` to be installed.
-      2. `mkdir /to/desired/db/location/HuGo/; cd /to/desired/db/location/HuGo/`
-      3. `aws s3 --no-sign-request --region eu-west-1 sync s3://ngi-igenomes/igenomes/Homo_sapiens/NCBI/GRCh38/Sequence/WholeGenomeFasta/ ./ --exclude "*" --include "genome.fa*`
-      4. `gawk '{print >out}; />chrEBV/{out="EBV.fa"}' out=temp.fa genome.fa; head -n -1 temp.fa > nonEBV.fa; rm EBV.fa temp.fa; mv nonEBV.fa genome.fa` Remove the EBV fasta record in this genome.
-      5. `singularity pull --arch amd64 library://ds_bioinformatics/jovian/qc_and_clean:2.0.0`
-      6. `singularity exec --bind "${PWD}" qc_and_clean_2.0.0.sif bowtie2-build --threads 8 genome.fa genome.fa`
-      7. `rm qc_and_clean:2.0.0`
+You can download a set of default databases using the `--install-databases` flag as shown below. During installation it will ask you a basepath, i.e. the directory where the databases will be stored on your system, and it will ask you to select one of the available database timestamps for the `nt` and `taxdb` databases.
+
+```bash
+jovian --install-databases
+```
+
+#### Considerations
+
+1. The databases are quite large and can take a while to download; at the time of writing (August, 2024) they require ~500GB of storage. Make sure you have sufficient storage available.
+2. This installs a default set of databases that will work for general metagenomic analyses in public health or clinical settings. However, depending on your experimental setup you may want to use different databases. For example, if you are performing a metagenomic analysis of mollusc bioaccumilation samples, or, viruses cultured on, e.g., a golden hamster cell line, then you would care less about the GDPR and removal of the human genome and would want to use an appropriate background genome instead via the `--background` flag. This would speed up your analysis.
+3. Depending on your study it might be wise to update the databases weekly, e.g. via `crontab`. Conversely, during a longitudinal study you might want to keep the databases fixed to ensure comparability of samples.  
 
 ## Citation
 
