@@ -269,10 +269,10 @@ jovian --install-databases
 
 ## Citation
 
-Please cite this paper as follows:
+Please cite [this paper](https://doi.org/10.1038/s41598-024-73785-y) as follows:
 
 ```text
-#TODO update after publication
+Schmitz, D., Zwagemaker, F., Nooij, S., Janssens, T. K., Cremer, J., Verhagen, R., ... & de Graaf, M. (2024). Accessible viral metagenomics for public health and clinical domains with Jovian. Scientific Reports, 14(1), 26018.
 ```
 
 ## Funding
