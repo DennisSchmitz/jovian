@@ -1,13 +1,13 @@
 
 #####################################################################################################################
 ### This script interacts with the public web-based virus typingtools hosted by the RIVM:                         ###
-###    Norovirus:      https://www.rivm.nl/mpf/[typingservice|typingtool]/norovirus/                              ###
-###    Enterovirus:    https://www.rivm.nl/mpf/[typingservice|typingtool]/enterovirus/                            ###
-###    Hepatitis A:    https://www.rivm.nl/mpf/[typingservice|typingtool]/hav/                                    ###
-###    Hepatitis E:    https://www.rivm.nl/mpf/[typingservice|typingtool]/hev/                                    ###
-###    Rotavirus:      https://www.rivm.nl/mpf/[typingservice|typingtool]/rotavirusa/                             ###
-###    Papillomavirus: https://www.rivm.nl/mpf/[typingservice|typingtool]/papillomavirus/                         ###
-###    Flavivirus:     https://www.rivm.nl/mpf/[typingservice|typingtool]/flavivirus/                             ###
+###    Norovirus:      https://[mpf|www].rivm.nl/mpf/[typingservice|typingtool]/norovirus/                        ###
+###    Enterovirus:    https://[mpf|www].rivm.nl/mpf/[typingservice|typingtool]/enterovirus/                      ###
+###    Hepatitis A:    https://[mpf|www].rivm.nl/mpf/[typingservice|typingtool]/hav/                              ###
+###    Hepatitis E:    https://[mpf|www].rivm.nl/mpf/[typingservice|typingtool]/hev/                              ###
+###    Rotavirus:      https://[mpf|www].rivm.nl/mpf/[typingservice|typingtool]/rotavirusa/                       ###
+###    Papillomavirus: https://[mpf|www].rivm.nl/mpf/[typingservice|typingtool]/papillomavirus/                   ###
+###    Flavivirus:     https://[mpf|www].rivm.nl/mpf/[typingservice|typingtool]/flavivirus/                       ###
 ###                                                                                                               ###
 ### Usage: bin/virus_typing.sh {NoV|EV|HAV|HEV|RVA|PV|Flavi} (--force)                                            ###
 ###     --force     Will redo and force-overwrite previously generated results.                                   ###
@@ -147,49 +147,49 @@ typingtool() {
 
     # Set proper variables depending on chosen typingtool
     if [ "${which_tt}" == "nov" ]; then
-        local tt_url="https://www.rivm.nl/mpf/typingservice/norovirus/"
+        local tt_url="https://mpf.rivm.nl/mpf/typingservice/norovirus/"
         local parser_py="${srcdir}scripts/typingtool_NoV_XML_to_csv_parser.py"
         local query_fasta=${OUTPUT_FOLDER}${basename/_taxClassified.tsv/_nov.fa}
         local extract_name="Caliciviridae" # Family
         local extract_field="8" # Family
         local nothing_found_message="Sample:\t${sample_name}\tNo scaffolds with family == Caliciviridae found."
     elif [ "${which_tt}" == "ev" ]; then
-        local tt_url="https://www.rivm.nl/mpf/typingservice/enterovirus/"
+        local tt_url="https://mpf.rivm.nl/mpf/typingservice/enterovirus/"
         local parser_py="${srcdir}scripts/typingtool_EV_XML_to_csv_parser.py"
         local query_fasta=${OUTPUT_FOLDER}${basename/_taxClassified.tsv/_ev.fa}
         local extract_name="Picornaviridae" # Family
         local extract_field="8" # Family
         local nothing_found_message="Sample:\t${sample_name}\tNo scaffolds with family == Picornaviridae found."
     elif [ "${which_tt}" == "hav" ]; then
-        local tt_url="https://www.rivm.nl/mpf/typingservice/hav/"
+        local tt_url="https://mpf.rivm.nl/mpf/typingservice/hav/"
         local parser_py="${srcdir}scripts/typingtool_HAV_XML_to_csv_parser.py"
         local query_fasta=${OUTPUT_FOLDER}${basename/_taxClassified.tsv/_hav.fa}
         local extract_name="Hepatovirus" # Genus
         local extract_field="7" # Genus
         local nothing_found_message="Sample:\t${sample_name}\tNo scaffolds with genus == Hepatovirus found."
     elif [ "${which_tt}" == "hev" ]; then
-        local tt_url="https://www.rivm.nl/mpf/typingservice/hev/"
+        local tt_url="https://mpf.rivm.nl/mpf/typingservice/hev/"
         local parser_py="${srcdir}scripts/typingtool_HEV_XML_to_csv_parser.py"
         local query_fasta=${OUTPUT_FOLDER}${basename/_taxClassified.tsv/_hev.fa}
         local extract_name="Orthohepevirus" # Genus
         local extract_field="7" # Genus
         local nothing_found_message="Sample:\t${sample_name}\tNo scaffolds with genus == Orthohepevirus found."
     elif [ "${which_tt}" == "rva" ]; then
-        local tt_url="https://www.rivm.nl/mpf/typingservice/rotavirusa/"
+        local tt_url="https://mpf.rivm.nl/mpf/typingservice/rotavirusa/"
         local parser_py="${srcdir}scripts/typingtool_RVA_XML_to_csv_parser.py"
         local query_fasta=${OUTPUT_FOLDER}${basename/_taxClassified.tsv/_rva.fa}
         local extract_name="Rotavirus" # Genus
         local extract_field="7" # Genus
         local nothing_found_message="Sample:\t${sample_name}\tNo scaffolds with genus == Rotavirus found."
     elif [ "${which_tt}" == "pv" ]; then
-        local tt_url="https://www.rivm.nl/mpf/typingservice/papillomavirus/"
+        local tt_url="https://mpf.rivm.nl/mpf/typingservice/papillomavirus/"
         local parser_py="${srcdir}scripts/typingtool_PV_XML_to_csv_parser.py"
         local query_fasta=${OUTPUT_FOLDER}${basename/_taxClassified.tsv/_pv.fa}
         local extract_name="Papillomaviridae" # Family
         local extract_field="8" # Family
         local nothing_found_message="Sample:\t${sample_name}\tNo scaffolds with family == Papillomaviridae found."
     elif [ "${which_tt}" == "flavi" ]; then
-        local tt_url="https://www.rivm.nl/mpf/typingservice/flavivirus/"
+        local tt_url="https://mpf.rivm.nl/mpf/typingservice/flavivirus/"
         local parser_py="${srcdir}scripts/typingtool_Flavi_XML_to_csv_parser.py"
         local query_fasta=${OUTPUT_FOLDER}${basename/_taxClassified.tsv/_flavi.fa}
         local extract_name="Flaviviridae" # Family
